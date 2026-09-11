@@ -1,0 +1,501 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>LPZ Live-Rechner</title>
+<style>
+  :root {
+    --accent: #1f6f43;
+    --accent-dark: #164f30;
+    --bg: #f4f6f5;
+    --card: #ffffff;
+    --border: #dfe5e2;
+    --text: #1c2622;
+    --muted: #6b7a73;
+    --win: #1f8a4c;
+    --loss: #c23b3b;
+    --touch-size: 48px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 12px;
+    padding-bottom: 40px;
+  }
+  .wrap { max-width: 600px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 8px 0 4px 0; text-align: center; }
+  .sub { color: var(--muted); margin-bottom: 16px; font-size: 0.88rem; text-align: center; }
+  
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 16px;
+    margin-bottom: 16px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  }
+  .card h2 {
+    font-size: 1.05rem;
+    margin: 0 0 12px 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .step-badge {
+    background: var(--accent);
+    color: white;
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    font-weight: bold;
+    flex-shrink: 0;
+  }
+  label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; font-weight: 500; }
+  input[type="text"], select {
+    width: 100%;
+    height: var(--touch-size);
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    font-size: 1rem;
+    background: #fff;
+    color: var(--text);
+    appearance: none;
+    -webkit-appearance: none;
+  }
+  .select-wrapper { position: relative; }
+  .select-wrapper::after {
+    content: "▼";
+    font-size: 0.75rem;
+    color: var(--muted);
+    position: absolute;
+    right: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    pointer-events: none;
+  }
+  .row { display: flex; flex-direction: column; gap: 10px; }
+  
+  button {
+    background: var(--accent);
+    color: white;
+    border: none;
+    height: var(--touch-size);
+    padding: 0 20px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 1rem;
+    font-weight: 600;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+  }
+  button:active { background: var(--accent-dark); }
+  button.secondary {
+    background: #fff;
+    color: var(--accent-dark);
+    border: 1.5px solid var(--accent);
+  }
+  button:disabled { background: #b7c1bc; cursor: not-allowed; }
+  
+  .pill {
+    display: inline-block;
+    background: #eaf3ee;
+    color: var(--accent-dark);
+    border-radius: 20px;
+    padding: 6px 14px;
+    font-size: 1rem;
+    font-weight: bold;
+  }
+  .msg { font-size: 0.85rem; margin-top: 10px; text-align: center; }
+  .msg.error { color: var(--loss); }
+  .msg.ok { color: var(--accent-dark); }
+  
+  .flags { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+  .flags label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.9rem;
+    color: var(--text);
+    background: #f8faf9;
+    padding: 10px 12px;
+    border-radius: 8px;
+    margin: 0;
+    cursor: pointer;
+  }
+  .flags input[type="checkbox"] {
+    width: 22px;
+    height: 22px;
+    accent-color: var(--accent);
+  }
+  
+  .roster-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+  .roster-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px;
+    background: #f8faf9;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+  }
+  .roster-info { font-weight: 600; font-size: 0.95rem; }
+  .roster-sub { font-size: 0.8rem; color: var(--muted); font-weight: normal; }
+  .roster-actions { display: flex; gap: 8px; align-items: center; }
+  .roster-actions select { height: 38px; width: 110px; font-size: 0.88rem; }
+  .roster-actions button { height: 38px; width: 44px; padding: 0; font-size: 1.2rem; }
+
+  .match-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px;
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 8px;
+  }
+  .remove-btn {
+    background: none; border: none; color: var(--loss); font-size: 1.3rem;
+    cursor: pointer; padding: 0 8px; height: auto; width: auto;
+  }
+
+  .result-box {
+    background: #eaf3ee;
+    border-radius: 14px;
+    padding: 20px;
+    text-align: center;
+    margin-top: 16px;
+  }
+  .result-box .big { font-size: 2.4rem; font-weight: 800; color: var(--accent-dark); }
+  .result-box .delta { font-size: 1.2rem; font-weight: 700; margin-top: 4px; }
+  .delta-plus { color: var(--win); }
+  .delta-minus { color: var(--loss); }
+
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🏓 LPZ Live-Rechner</h1>
+  <div class="sub">Mobil-optimiert für Mannschaftskämpfe</div>
+
+  <!-- Schritt 1 -->
+  <div class="card">
+    <h2><span class="step-badge">1</span> Mein Team laden</h2>
+    <label for="teamUrl">Link zur Team-Seite (web4sport / TischtennisLive)</label>
+    <div class="row">
+      <input type="text" id="teamUrl" placeholder="https://app.web4sport.de/?L1=Ergebnisse&...">
+      <button id="loadTeamBtn">Team-Daten laden</button>
+    </div>
+    <div id="teamMsg" class="msg"></div>
+
+    <div id="myPlayerBlock" class="hidden" style="margin-top:16px;">
+      <label for="myPlayerSelect">Mein Spieler</label>
+      <div class="select-wrapper">
+        <select id="myPlayerSelect"></select>
+      </div>
+      <div style="margin-top: 12px; display: flex; align-items: center; justify-content: space-between;">
+        <span style="font-size: 0.9rem; color: var(--muted);">Start LPZ:</span>
+        <div class="pill" id="myPlayerPz">–</div>
+      </div>
+
+      <label style="margin-top:16px;">K-Faktor Anpassung (Optional)</label>
+      <div class="flags">
+        <label><input type="checkbox" id="flagU21"> Jünger als 21 Jahre (+4)</label>
+        <label><input type="checkbox" id="flagU16"> Zusätzlich jünger als 16 (+4)</label>
+        <label><input type="checkbox" id="flagInactive"> &gt;365 Tage inaktiv (+4)</label>
+        <label><input type="checkbox" id="flagFewGames"> &lt;30 gewertete Einzel (+4)</label>
+      </div>
+    </div>
+  </div>
+
+  <!-- Schritt 2 -->
+  <div class="card hidden" id="opponentCard">
+    <h2><span class="step-badge">2</span> Gegner-Team wählen</h2>
+    <label for="opponentTeamSelect">Gegnerische Mannschaft</label>
+    <div class="select-wrapper" style="margin-bottom:10px;">
+      <select id="opponentTeamSelect"></select>
+    </div>
+    <button id="loadOpponentBtn" class="secondary">Kader laden</button>
+    <div id="opponentMsg" class="msg"></div>
+
+    <div id="opponentRosterList" class="roster-list hidden"></div>
+  </div>
+
+  <!-- Schritt 3 -->
+  <div class="card hidden" id="matchesCard">
+    <h2><span class="step-badge">3</span> Erfagte Einzel</h2>
+    <div id="matchesList"></div>
+    <div id="noMatchesMsg" style="font-size: 0.85rem; color: var(--muted); text-align: center; padding: 12px;">Noch kein Einzel hinzugefügt.</div>
+    <div style="margin-top: 14px;">
+      <button id="calcBtn">Neue LPZ berechnen</button>
+    </div>
+  </div>
+
+  <!-- Ergebnis -->
+  <div class="card hidden" id="resultCard">
+    <h2><span class="step-badge">✓</span> Berechnung</h2>
+    <div id="resultList" class="roster-list"></div>
+    <div class="result-box">
+      <div style="font-size: 0.9rem; color: var(--muted);">Prognostizierte neue LPZ</div>
+      <div class="big" id="resultNewPz">–</div>
+      <div class="delta" id="resultDelta">–</div>
+    </div>
+  </div>
+</div>
+
+<script>
+let myPlayer = null;
+let matches = [];
+let currentOpponentRoster = [];
+
+const $ = (id) => document.getElementById(id);
+
+function setMsg(el, text, ok) {
+  el.textContent = text || "";
+  el.className = "msg " + (ok ? "ok" : "error");
+}
+
+function parseHTML(htmlText) {
+  const parser = new DOMParser();
+  return parser.parseFromString(htmlText, 'text/html');
+}
+
+function extractRoster(doc) {
+  const players = [];
+  const tables = doc.querySelectorAll('table');
+  tables.forEach(table => {
+    const rows = Array.from(table.querySelectorAll('tr'));
+    if (!rows.length) return;
+    const headers = Array.from(rows[0].querySelectorAll('th, td')).map(c => c.textContent.trim().toLowerCase());
+    const livepzIdx = headers.findIndex(h => h.includes('livepz'));
+    const nameIdx = headers.findIndex(h => h.includes('spieler') || h === 'name');
+
+    if (livepzIdx !== -1 && nameIdx !== -1) {
+      rows.slice(1).forEach(row => {
+        const cells = row.querySelectorAll('td, th');
+        if (cells.length > Math.max(livepzIdx, nameIdx)) {
+          const name = cells[nameIdx].textContent.trim();
+          const pzText = cells[livepzIdx].textContent.trim();
+          if (name && /^\d+$/.test(pzText)) {
+            players.push({ name, livepz: parseInt(pzText, 10) });
+          }
+        }
+      });
+    }
+  });
+  return players;
+}
+
+function extractTeams(doc) {
+  const teams = [];
+  const links = doc.querySelectorAll('a[href*="L3=Mannschaften"][href*="L3P="]');
+  const seen = new Set();
+  links.forEach(a => {
+    const href = a.getAttribute('href');
+    const name = a.textContent.trim();
+    const match = href.match(/L3P=(\d+)/);
+    if (match && name && !seen.has(match[1])) {
+      seen.add(match[1]);
+      let fullUrl = href;
+      if (!fullUrl.startsWith('http')) {
+        fullUrl = 'https://app.web4sport.de/' + (fullUrl.startsWith('/') ? fullUrl.substring(1) : fullUrl);
+      }
+      teams.push({ name, url: fullUrl });
+    }
+  });
+  return teams;
+}
+
+async function fetchPage(url) {
+  const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+  const res = await fetch(proxyUrl);
+  if (!res.ok) throw new Error("Netzwerkfehler");
+  const data = await res.json();
+  return parseHTML(data.contents);
+}
+
+$("loadTeamBtn").addEventListener("click", async () => {
+  const url = $("teamUrl").value.trim();
+  if (!url) { setMsg($("teamMsg"), "Bitte Link eingeben.", false); return; }
+  setMsg($("teamMsg"), "Lade Daten...", true);
+  $("loadTeamBtn").disabled = true;
+
+  try {
+    const doc = await fetchPage(url);
+    const players = extractRoster(doc);
+    const teams = extractTeams(doc);
+
+    if (!players.length) {
+      setMsg($("teamMsg"), "Keine Spieler/LivePZ auf der Seite gefunden.", false);
+      return;
+    }
+
+    setMsg($("teamMsg"), `${players.length} Spieler geladen!`, true);
+
+    const sel = $("myPlayerSelect");
+    sel.innerHTML = "";
+    players.forEach((p, idx) => {
+      const opt = document.createElement("option");
+      opt.value = idx;
+      opt.textContent = `${p.name} (${p.livepz})`;
+      sel.appendChild(opt);
+    });
+
+    myPlayer = players[0];
+    $("myPlayerPz").textContent = myPlayer.livepz;
+    $("myPlayerBlock").classList.remove("hidden");
+
+    sel.onchange = () => {
+      myPlayer = players[sel.value];
+      $("myPlayerPz").textContent = myPlayer.livepz;
+    };
+
+    const oppSel = $("opponentTeamSelect");
+    oppSel.innerHTML = "";
+    teams.forEach(t => {
+      const opt = document.createElement("option");
+      opt.value = t.url;
+      opt.textContent = t.name;
+      oppSel.appendChild(opt);
+    });
+
+    $("opponentCard").classList.remove("hidden");
+    $("matchesCard").classList.remove("hidden");
+  } catch (e) {
+    setMsg($("teamMsg"), "Fehler beim Laden: " + e.message, false);
+  } finally {
+    $("loadTeamBtn").disabled = false;
+  }
+});
+
+$("loadOpponentBtn").addEventListener("click", async () => {
+  const url = $("opponentTeamSelect").value;
+  if (!url) return;
+  setMsg($("opponentMsg"), "Lade Gegner-Kader...", true);
+  $("loadOpponentBtn").disabled = true;
+
+  try {
+    const doc = await fetchPage(url);
+    currentOpponentRoster = extractRoster(doc);
+    setMsg($("opponentMsg"), `${currentOpponentRoster.length} Gegner gefunden.`, true);
+    renderOpponentRoster();
+  } catch (e) {
+    setMsg($("opponentMsg"), "Fehler beim Laden.", false);
+  } finally {
+    $("loadOpponentBtn").disabled = false;
+  }
+});
+
+function renderOpponentRoster() {
+  const list = $("opponentRosterList");
+  list.innerHTML = "";
+  currentOpponentRoster.forEach(p => {
+    const item = document.createElement("div");
+    item.className = "roster-item";
+    item.innerHTML = `
+      <div>
+        <div class="roster-info">${p.name}</div>
+        <div class="roster-sub">LPZ: ${p.livepz}</div>
+      </div>
+      <div class="roster-actions">
+        <div class="select-wrapper">
+          <select class="res-sel">
+            <option value="win">Sieg</option>
+            <option value="loss">Niederlage</option>
+          </select>
+        </div>
+        <button class="add-btn">+</button>
+      </div>
+    `;
+    item.querySelector(".add-btn").addEventListener("click", () => {
+      const win = item.querySelector(".res-sel").value === "win";
+      matches.push({ name: p.name, livepz: p.livepz, win });
+      renderMatches();
+    });
+    list.appendChild(item);
+  });
+  list.classList.remove("hidden");
+}
+
+function renderMatches() {
+  const container = $("matchesList");
+  container.innerHTML = "";
+  matches.forEach((m, idx) => {
+    const item = document.createElement("div");
+    item.className = "match-item";
+    item.innerHTML = `
+      <div>
+        <div style="font-weight:600;">${m.name} (${m.livepz})</div>
+        <div style="font-size:0.85rem; color:${m.win ? 'var(--win)' : 'var(--loss)'}; font-weight:bold;">
+          ${m.win ? 'Sieg' : 'Niederlage'}
+        </div>
+      </div>
+      <button class="remove-btn">✕</button>
+    `;
+    item.querySelector(".remove-btn").addEventListener("click", () => {
+      matches.splice(idx, 1);
+      renderMatches();
+    });
+    container.appendChild(item);
+  });
+  $("noMatchesMsg").classList.toggle("hidden", matches.length > 0);
+}
+
+$("calcBtn").addEventListener("click", () => {
+  if (!myPlayer || !matches.length) return;
+
+  let extraK = 0;
+  if ($("flagU21").checked) extraK += 4;
+  if ($("flagU16").checked) extraK += 4;
+  if ($("flagInactive").checked) extraK += 4;
+  if ($("flagFewGames").checked) extraK += 4;
+  const k = Math.min(16 + extraK, 32);
+
+  let totalDelta = 0;
+  const resContainer = $("resultList");
+  resContainer.innerHTML = "";
+
+  matches.forEach(m => {
+    const ew = 1.0 / (1.0 + Math.pow(10, -(myPlayer.livepz - m.livepz) / 150));
+    const rawDelta = m.win ? (1 - ew) * k : -ew * k;
+    const delta = Math.round(rawDelta);
+    totalDelta += delta;
+
+    const item = document.createElement("div");
+    item.className = "roster-item";
+    const deltaClass = delta >= 0 ? "delta-plus" : "delta-minus";
+    item.innerHTML = `
+      <div>
+        <div class="roster-info">${m.name} (${m.livepz})</div>
+        <div class="roster-sub">Erwartung: ${(ew * 100).toFixed(1)}% | ${m.win ? 'Sieg' : 'Niederlage'}</div>
+      </div>
+      <div class="${deltaClass}" style="font-size:1.1rem;">
+        ${delta >= 0 ? '+' : ''}${delta}
+      </div>
+    `;
+    resContainer.appendChild(item);
+  });
+
+  const newPz = Math.round(myPlayer.livepz + totalDelta);
+  $("resultNewPz").textContent = newPz;
+  const totalClass = totalDelta >= 0 ? "delta-plus" : "delta-minus";
+  $("resultDelta").innerHTML = `<span class="${totalClass}">${totalDelta >= 0 ? '+' : ''}${totalDelta} LPZ</span> (K-Faktor: ${k})`;
+
+  $("resultCard").classList.remove("hidden");
+  $("resultCard").scrollIntoView({ behavior: "smooth" });
+});
+</script>
+</body>
+</html>
