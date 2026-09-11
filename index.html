@@ -58,7 +58,7 @@
     flex-shrink: 0;
   }
   label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; font-weight: 500; }
-  input[type="text"], select {
+  input[type="text"], textarea, select {
     width: 100%;
     height: var(--touch-size);
     padding: 0 12px;
@@ -70,6 +70,7 @@
     appearance: none;
     -webkit-appearance: none;
   }
+  textarea { height: 100px; padding: 10px; font-family: monospace; font-size: 0.8rem; }
   .select-wrapper { position: relative; }
   .select-wrapper::after {
     content: "▼";
@@ -104,6 +105,11 @@
     background: #fff;
     color: var(--accent-dark);
     border: 1.5px solid var(--accent);
+  }
+  button.danger {
+    background: #fff;
+    color: var(--loss);
+    border: 1.5px solid var(--loss);
   }
   button:disabled { background: #b7c1bc; cursor: not-allowed; }
   
@@ -182,6 +188,16 @@
   .delta-plus { color: var(--win); }
   .delta-minus { color: var(--loss); }
 
+  .fav-bar {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .fav-bar button {
+    height: 38px;
+    font-size: 0.85rem;
+  }
+
   .hidden { display: none; }
 </style>
 </head>
@@ -198,7 +214,19 @@
       <input type="text" id="teamUrl" placeholder="https://app.web4sport.de/?L1=Ergebnisse&...">
       <button id="loadTeamBtn">Team-Daten laden</button>
     </div>
+    
+    <div class="fav-bar">
+      <button id="saveFavBtn" class="secondary">★ Als Favorit speichern</button>
+      <button id="clearFavBtn" class="danger hidden">Favorit löschen</button>
+    </div>
+
     <div id="teamMsg" class="msg"></div>
+
+    <div id="manualFallback" class="hidden" style="margin-top:14px; border-top:1px dashed var(--border); padding-top:12px;">
+      <label for="manualHtml">HTML-Quelltext hier einfügen (Notfall-Modus):</label>
+      <textarea id="manualHtml" placeholder="Quelltext der web4sport-Seite hier hineinkopieren..."></textarea>
+      <button id="parseManualBtn" style="margin-top:8px;" class="secondary">Quelltext verarbeiten</button>
+    </div>
 
     <div id="myPlayerBlock" class="hidden" style="margin-top:16px;">
       <label for="myPlayerSelect">Mein Spieler</label>
@@ -230,12 +258,18 @@
     <button id="loadOpponentBtn" class="secondary">Kader laden</button>
     <div id="opponentMsg" class="msg"></div>
 
+    <div id="oppManualFallback" class="hidden" style="margin-top:14px; border-top:1px dashed var(--border); padding-top:12px;">
+      <label for="oppManualHtml">HTML-Quelltext der Gegner-Seite einfügen:</label>
+      <textarea id="oppManualHtml" placeholder="Quelltext der Gegner-Seite hier hineinkopieren..."></textarea>
+      <button id="parseOppManualBtn" style="margin-top:8px;" class="secondary">Gegner-Quelltext verarbeiten</button>
+    </div>
+
     <div id="opponentRosterList" class="roster-list hidden"></div>
   </div>
 
   <!-- Schritt 3 -->
   <div class="card hidden" id="matchesCard">
-    <h2><span class="step-badge">3</span> Erfagte Einzel</h2>
+    <h2><span class="step-badge">3</span> Erfasste Einzel</h2>
     <div id="matchesList"></div>
     <div id="noMatchesMsg" style="font-size: 0.85rem; color: var(--muted); text-align: center; padding: 12px;">Noch kein Einzel hinzugefügt.</div>
     <div style="margin-top: 14px;">
@@ -256,9 +290,12 @@
 </div>
 
 <script>
+const MY_CLOUDFLARE_WORKER = "https://lpz-proxy.johann172.workers.dev"; 
+
 let myPlayer = null;
 let matches = [];
 let currentOpponentRoster = [];
+let currentBaseUrl = "https://app.web4sport.de/";
 
 const $ = (id) => document.getElementById(id);
 
@@ -274,109 +311,215 @@ function parseHTML(htmlText) {
 
 function extractRoster(doc) {
   const players = [];
-  const tables = doc.querySelectorAll('table');
-  tables.forEach(table => {
-    const rows = Array.from(table.querySelectorAll('tr'));
-    if (!rows.length) return;
-    const headers = Array.from(rows[0].querySelectorAll('th, td')).map(c => c.textContent.trim().toLowerCase());
-    const livepzIdx = headers.findIndex(h => h.includes('livepz'));
-    const nameIdx = headers.findIndex(h => h.includes('spieler') || h === 'name');
+  const seenNames = new Set();
 
-    if (livepzIdx !== -1 && nameIdx !== -1) {
-      rows.slice(1).forEach(row => {
-        const cells = row.querySelectorAll('td, th');
-        if (cells.length > Math.max(livepzIdx, nameIdx)) {
-          const name = cells[nameIdx].textContent.trim();
-          const pzText = cells[livepzIdx].textContent.trim();
-          if (name && /^\d+$/.test(pzText)) {
-            players.push({ name, livepz: parseInt(pzText, 10) });
-          }
-        }
-      });
+  const tables = Array.from(doc.querySelectorAll('table'));
+  let targetTable = null;
+
+  for (const table of tables) {
+    const txt = table.textContent;
+    if ((txt.includes('LivePZ') || txt.includes('LPZ') || txt.includes('PZ')) &&
+        (txt.includes('Spieler') || txt.includes('Position') || txt.includes('Bilanzen'))) {
+      targetTable = table;
+      break;
+    }
+  }
+
+  const scope = targetTable || doc.body;
+
+  const rows = scope.querySelectorAll('tr');
+  rows.forEach(row => {
+    const cells = Array.from(row.querySelectorAll('td, th')).map(c => c.textContent.trim());
+    if (cells.length < 2) return;
+
+    const fullRowText = cells.join(' ');
+    if (fullRowText.length > 120 || fullRowText.includes('Position') || fullRowText.includes('Bilanzen')) return;
+
+    let name = "";
+    let pz = null;
+
+    cells.forEach(cell => {
+      if (/^\d{3,4}$/.test(cell)) {
+        const val = parseInt(cell, 10);
+        if (val >= 500 && val <= 3000) pz = val;
+      }
+      if (/[a-zA-ZäöüÄÖÜß]{2,}/.test(cell) && 
+          !cell.includes('LivePZ') && !cell.includes('Gesamt') && !cell.includes('ST') &&
+          cell.length < 40) {
+        let clean = cell.replace(/^\d+\.\s*/, '').replace(/(NES|S|N|E)?\d*$/, '').trim();
+        if (clean.length >= 3) name = clean;
+      }
+    });
+
+    if (name && pz && !seenNames.has(name)) {
+      seenNames.add(name);
+      players.push({ name, livepz: pz });
     }
   });
+
+  if (players.length === 0 && targetTable) {
+    const text = targetTable.textContent;
+    const regex = /(\d{1,2})\.\s*([A-Za-zÄÖÜäöüß\s\-\.]+?)(?:NES|S|N|E)?\d*\s*(?:[\d\:]+\s*)?(\d{3,4})(?=\s|\d+\.|$)/g;
+    let m;
+    while ((m = regex.exec(text)) !== null) {
+      let rawName = m[2].trim();
+      let pz = parseInt(m[3], 10);
+      
+      rawName = rawName.replace(/^(Einzel|Bilanzen|Position|Spieler|Kennzeichnung|ST|PK\d|Gesamt|LivePZ)+/gi, '').trim();
+      rawName = rawName.replace(/\d+$/, '').trim();
+
+      if (rawName.length >= 3 && pz >= 500 && pz <= 3000 && !seenNames.has(rawName)) {
+        seenNames.add(rawName);
+        players.push({ name: rawName, livepz: pz });
+      }
+    }
+  }
+
   return players;
 }
 
-function extractTeams(doc) {
+function extractTeams(doc, baseUrl) {
   const teams = [];
-  const links = doc.querySelectorAll('a[href*="L3=Mannschaften"][href*="L3P="]');
   const seen = new Set();
+
+  const ignoreWords = [
+    'spielplan', 'vorrunde', 'rückrunde', 'vorbericht', 'bericht',
+    'tabelle', 'bilanzen', 'ergebnisse', 'gesamt', 'einzel', 'doppel',
+    'mannschaften', 'übersicht', 'zurück', 'archiv', 'drucken', 'aufstellung'
+  ];
+
+  const links = doc.querySelectorAll('a[href*="L3P="], a[href*="L3=Mannschaften"]');
+
   links.forEach(a => {
     const href = a.getAttribute('href');
     const name = a.textContent.trim();
+    const lowerName = name.toLowerCase();
+
+    if (!href || !name) return;
+
+    if (ignoreWords.some(word => lowerName.includes(word))) return;
+    if (/^\d+:\d+$/.test(name)) return;
+    if (!href.includes('Mannschaften')) return;
+
     const match = href.match(/L3P=(\d+)/);
-    if (match && name && !seen.has(match[1])) {
+    if (match && !seen.has(match[1])) {
       seen.add(match[1]);
-      let fullUrl = href;
-      if (!fullUrl.startsWith('http')) {
-        fullUrl = 'https://app.web4sport.de/' + (fullUrl.startsWith('/') ? fullUrl.substring(1) : fullUrl);
-      }
-      teams.push({ name, url: fullUrl });
+      try {
+        const fullUrl = new URL(href, baseUrl).href;
+        teams.push({ name, url: fullUrl });
+      } catch (e) {}
     }
   });
+
   return teams;
 }
 
 async function fetchPage(url) {
-  const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+  const proxyUrl = `${MY_CLOUDFLARE_WORKER}/?url=${encodeURIComponent(url)}`;
   const res = await fetch(proxyUrl);
-  if (!res.ok) throw new Error("Netzwerkfehler");
-  const data = await res.json();
-  return parseHTML(data.contents);
+  if (!res.ok) throw new Error("Proxy-Fehler: " + res.status);
+  const htmlText = await res.text();
+  return parseHTML(htmlText);
 }
 
-$("loadTeamBtn").addEventListener("click", async () => {
+function processDocument(doc) {
+  const players = extractRoster(doc);
+  const teams = extractTeams(doc, currentBaseUrl);
+
+  if (!players.length) {
+    throw new Error("Keine Spieler/LivePZ in den Daten gefunden.");
+  }
+
+  setMsg($("teamMsg"), `${players.length} Spieler geladen!`, true);
+
+  const sel = $("myPlayerSelect");
+  sel.innerHTML = "";
+  players.forEach((p, idx) => {
+    const opt = document.createElement("option");
+    opt.value = idx;
+    opt.textContent = `${p.name} (${p.livepz})`;
+    sel.appendChild(opt);
+  });
+
+  myPlayer = players[0];
+  $("myPlayerPz").textContent = myPlayer.livepz;
+  $("myPlayerBlock").classList.remove("hidden");
+
+  sel.onchange = () => {
+    myPlayer = players[sel.value];
+    $("myPlayerPz").textContent = myPlayer.livepz;
+  };
+
+  const oppSel = $("opponentTeamSelect");
+  oppSel.innerHTML = "";
+  teams.forEach(t => {
+    const opt = document.createElement("option");
+    opt.value = t.url;
+    opt.textContent = t.name;
+    oppSel.appendChild(opt);
+  });
+
+  $("opponentCard").classList.remove("hidden");
+  $("matchesCard").classList.remove("hidden");
+  $("manualFallback").classList.add("hidden");
+}
+
+async function loadTeamData() {
   const url = $("teamUrl").value.trim();
   if (!url) { setMsg($("teamMsg"), "Bitte Link eingeben.", false); return; }
+  currentBaseUrl = url;
   setMsg($("teamMsg"), "Lade Daten...", true);
   $("loadTeamBtn").disabled = true;
 
   try {
     const doc = await fetchPage(url);
-    const players = extractRoster(doc);
-    const teams = extractTeams(doc);
-
-    if (!players.length) {
-      setMsg($("teamMsg"), "Keine Spieler/LivePZ auf der Seite gefunden.", false);
-      return;
-    }
-
-    setMsg($("teamMsg"), `${players.length} Spieler geladen!`, true);
-
-    const sel = $("myPlayerSelect");
-    sel.innerHTML = "";
-    players.forEach((p, idx) => {
-      const opt = document.createElement("option");
-      opt.value = idx;
-      opt.textContent = `${p.name} (${p.livepz})`;
-      sel.appendChild(opt);
-    });
-
-    myPlayer = players[0];
-    $("myPlayerPz").textContent = myPlayer.livepz;
-    $("myPlayerBlock").classList.remove("hidden");
-
-    sel.onchange = () => {
-      myPlayer = players[sel.value];
-      $("myPlayerPz").textContent = myPlayer.livepz;
-    };
-
-    const oppSel = $("opponentTeamSelect");
-    oppSel.innerHTML = "";
-    teams.forEach(t => {
-      const opt = document.createElement("option");
-      opt.value = t.url;
-      opt.textContent = t.name;
-      oppSel.appendChild(opt);
-    });
-
-    $("opponentCard").classList.remove("hidden");
-    $("matchesCard").classList.remove("hidden");
+    processDocument(doc);
   } catch (e) {
-    setMsg($("teamMsg"), "Fehler beim Laden: " + e.message, false);
+    setMsg($("teamMsg"), "Automatisches Laden fehlgeschlagen. Du kannst den Quelltext unten manuell einfügen.", false);
+    $("manualFallback").classList.remove("hidden");
   } finally {
     $("loadTeamBtn").disabled = false;
+  }
+}
+
+$("loadTeamBtn").addEventListener("click", loadTeamData);
+
+// Favoriten-Logik
+$("saveFavBtn").addEventListener("click", () => {
+  const url = $("teamUrl").value.trim();
+  if (!url) {
+    setMsg($("teamMsg"), "Bitte zuerst einen Link eingeben.", false);
+    return;
+  }
+  localStorage.setItem("favTeamUrl", url);
+  $("clearFavBtn").classList.remove("hidden");
+  setMsg($("teamMsg"), "★ Team als Favorit gespeichert!", true);
+});
+
+$("clearFavBtn").addEventListener("click", () => {
+  localStorage.removeItem("favTeamUrl");
+  $("clearFavBtn").classList.add("hidden");
+  setMsg($("teamMsg"), "Favorit gelöscht.", true);
+});
+
+// Automatisches Laden des Favoriten beim Öffnen der Seite
+window.addEventListener("DOMContentLoaded", () => {
+  const savedUrl = localStorage.getItem("favTeamUrl");
+  if (savedUrl) {
+    $("teamUrl").value = savedUrl;
+    $("clearFavBtn").classList.remove("hidden");
+    loadTeamData();
+  }
+});
+
+$("parseManualBtn").addEventListener("click", () => {
+  const htmlText = $("manualHtml").value.trim();
+  if (!htmlText) return;
+  try {
+    const doc = parseHTML(htmlText);
+    processDocument(doc);
+  } catch (e) {
+    setMsg($("teamMsg"), e.message, false);
   }
 });
 
@@ -385,16 +528,34 @@ $("loadOpponentBtn").addEventListener("click", async () => {
   if (!url) return;
   setMsg($("opponentMsg"), "Lade Gegner-Kader...", true);
   $("loadOpponentBtn").disabled = true;
+  $("oppManualFallback").classList.add("hidden");
 
   try {
     const doc = await fetchPage(url);
     currentOpponentRoster = extractRoster(doc);
+    if (!currentOpponentRoster.length) throw new Error("Keine Spieler gefunden.");
     setMsg($("opponentMsg"), `${currentOpponentRoster.length} Gegner gefunden.`, true);
     renderOpponentRoster();
   } catch (e) {
-    setMsg($("opponentMsg"), "Fehler beim Laden.", false);
+    setMsg($("opponentMsg"), "Laden fehlgeschlagen. Bitte Quelltext der Gegnerseite unten einfügen.", false);
+    $("oppManualFallback").classList.remove("hidden");
   } finally {
     $("loadOpponentBtn").disabled = false;
+  }
+});
+
+$("parseOppManualBtn").addEventListener("click", () => {
+  const htmlText = $("oppManualHtml").value.trim();
+  if (!htmlText) return;
+  try {
+    const doc = parseHTML(htmlText);
+    currentOpponentRoster = extractRoster(doc);
+    if (!currentOpponentRoster.length) throw new Error("Keine Spieler im Quelltext gefunden.");
+    setMsg($("opponentMsg"), `${currentOpponentRoster.length} Gegner geladen!`, true);
+    renderOpponentRoster();
+    $("oppManualFallback").classList.add("hidden");
+  } catch (e) {
+    setMsg($("opponentMsg"), e.message, false);
   }
 });
 
