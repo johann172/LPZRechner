@@ -208,16 +208,34 @@
 
   <!-- Schritt 1 -->
   <div class="card">
-    <h2><span class="step-badge">1</span> Mein Team laden</h2>
-    <label for="teamUrl">Link zur Team-Seite (web4sport / TischtennisLive)</label>
+    <h2><span class="step-badge">1</span> Mein Spieler / Team laden</h2>
+
+    <label>⭐ Favoriten-Spieler</label>
+    <div id="favPlayersList" class="roster-list"></div>
+    <div class="row" style="margin-top: 8px;">
+      <input type="text" id="favPlayerLabel" placeholder="Name (z. B. Franz Hoppe)">
+      <input type="text" id="favPlayerUrl" placeholder="Link zur Spieler-Seite (...L3=Spieler&L3P=...)">
+      <button id="addFavPlayerBtn" class="secondary">+ Spieler als Favorit speichern</button>
+    </div>
+    <div id="favPlayerMsg" class="msg"></div>
+
+    <div id="favPlayerTeamsBox" class="hidden" style="margin-top: 14px; border-top: 1px dashed var(--border); padding-top: 12px;">
+      <label id="favPlayerTeamsLabel">Für welche Mannschaft?</label>
+      <div class="select-wrapper" style="margin-bottom: 10px;">
+        <select id="favPlayerTeamsSelect"></select>
+      </div>
+      <button id="useFavPlayerTeamBtn">Diese Mannschaft laden</button>
+    </div>
+
+    <label for="teamUrl" style="margin-top: 18px; border-top: 1px dashed var(--border); padding-top: 12px;">Oder: Link direkt zu einer Team-Seite eingeben</label>
     <div class="row">
       <input type="text" id="teamUrl" placeholder="https://app.web4sport.de/?L1=Ergebnisse&...">
       <button id="loadTeamBtn">Team-Daten laden</button>
     </div>
     
     <div class="fav-bar">
-      <button id="saveFavBtn" class="secondary">★ Als Favorit speichern</button>
-      <button id="clearFavBtn" class="danger hidden">Favorit löschen</button>
+      <button id="saveFavBtn" class="secondary">★ Als Standard-Team speichern</button>
+      <button id="clearFavBtn" class="danger hidden">Standard-Team löschen</button>
     </div>
 
     <div id="teamMsg" class="msg"></div>
@@ -313,6 +331,31 @@ function extractRoster(doc) {
   const players = [];
   const seenNames = new Set();
 
+  // Primäre Methode: Die Seite markiert die LivePZ-Zelle zuverlässig mit
+  // einem title-Attribut wie "LivePZ-Wert vom 12.09.2026". Wir suchen in
+  // jeder Tabellenzeile nach dieser Zelle + einem Spieler-Link
+  // (a[href*="L3=Spieler"]) in derselben Zeile.
+  doc.querySelectorAll('tr').forEach(row => {
+    const nameLink = row.querySelector('a[href*="L3=Spieler"]');
+    const pzCell = row.querySelector('td[title*="LivePZ"]');
+    if (!nameLink || !pzCell) return;
+
+    const name = nameLink.textContent.trim();
+    const pzText = pzCell.textContent.trim();
+    if (!name || !/^\d{2,4}$/.test(pzText)) return;
+
+    const pz = parseInt(pzText, 10);
+    if (pz < 200 || pz > 3000) return;
+    if (seenNames.has(name)) return;
+
+    seenNames.add(name);
+    players.push({ name, livepz: pz });
+  });
+
+  if (players.length > 0) return players;
+
+  // Fallback (Notfall-Modus): grobe Heuristik, falls das title-Attribut
+  // auf einer Seite einmal fehlen sollte.
   const tables = Array.from(doc.querySelectorAll('table'));
   let targetTable = null;
 
@@ -414,15 +457,67 @@ function extractTeams(doc, baseUrl) {
   return teams;
 }
 
+// Liest die "Bilanz"-Tabelle einer Spieler-Seite aus (siehe Screenshot: Mannschaft | Kennzeichnung | ST | PK1-4 | Gesamt | LivePZ)
+// und liefert alle Mannschaften, für die dieser Spieler gemeldet ist.
+// Sucht direkt nach Zeilen mit einem Mannschafts-Link (a[href*="L3=Mannschaften"]);
+// die LivePZ-Zelle in derselben Zeile erkennt man zuverlässig am title-Attribut
+// "LivePZ-Wert vom ...". Diese Zelle fehlt bei Mannschaften, in denen der
+// Spieler noch kein Spiel gemacht hat - dann bleibt livepz einfach null.
+function extractPlayerBilanz(doc, baseUrl) {
+  const teams = [];
+  const seen = new Set();
+  let overallPz = null;
+
+  doc.querySelectorAll('tr').forEach(row => {
+    const link = row.querySelector('a[href*="L3=Mannschaften"]');
+    if (!link) return;
+    const teamName = link.textContent.trim();
+    const href = link.getAttribute('href');
+    if (!teamName || !href) return;
+
+    let teamUrl;
+    try { teamUrl = new URL(href, baseUrl).href; } catch (e) { return; }
+    if (seen.has(teamUrl)) return;
+
+    let pz = null;
+    const pzCell = row.querySelector('td[title*="LivePZ"]');
+    if (pzCell) {
+      const t = pzCell.textContent.trim();
+      if (/^\d{2,4}$/.test(t)) {
+        const v = parseInt(t, 10);
+        if (v >= 200 && v <= 3000) pz = v;
+      }
+    }
+    if (pz) overallPz = pz;
+
+    seen.add(teamUrl);
+    teams.push({ name: teamName, url: teamUrl, livepz: pz });
+  });
+
+  return { teams, livepz: overallPz };
+}
+
 async function fetchPage(url) {
   const proxyUrl = `${MY_CLOUDFLARE_WORKER}/?url=${encodeURIComponent(url)}`;
-  const res = await fetch(proxyUrl);
-  if (!res.ok) throw new Error("Proxy-Fehler: " + res.status);
+  let res;
+  try {
+    res = await fetch(proxyUrl);
+  } catch (networkErr) {
+    throw new Error(`Proxy nicht erreichbar (${MY_CLOUDFLARE_WORKER}): ${networkErr.message}`);
+  }
+  if (!res.ok) {
+    let bodyText = "";
+    try { bodyText = (await res.text()).slice(0, 200); } catch (e) {}
+    throw new Error(`Proxy antwortete mit Status ${res.status} ${res.statusText}${bodyText ? " – " + bodyText : ""}`);
+  }
   const htmlText = await res.text();
+  if (!htmlText || htmlText.trim().length < 50) {
+    throw new Error("Proxy lieferte eine leere/zu kurze Antwort.");
+  }
   return parseHTML(htmlText);
 }
 
-function processDocument(doc) {
+function processDocument(doc, preferredPlayerName) {
   const players = extractRoster(doc);
   const teams = extractTeams(doc, currentBaseUrl);
 
@@ -441,7 +536,17 @@ function processDocument(doc) {
     sel.appendChild(opt);
   });
 
-  myPlayer = players[0];
+  // Falls ein Favoriten-Spieler gewählt wurde: passenden Eintrag im geladenen
+  // Team-Kader vorauswählen (Namensabgleich), statt einfach den ersten zu nehmen.
+  let startIdx = 0;
+  if (preferredPlayerName) {
+    const norm = (s) => s.toLowerCase().replace(/[^a-zäöüß\s]/g, "").trim();
+    const target = norm(preferredPlayerName);
+    const foundIdx = players.findIndex(p => norm(p.name) === target || norm(p.name).includes(target) || target.includes(norm(p.name)));
+    if (foundIdx >= 0) startIdx = foundIdx;
+  }
+  sel.value = startIdx;
+  myPlayer = players[startIdx];
   $("myPlayerPz").textContent = myPlayer.livepz;
   $("myPlayerBlock").classList.remove("hidden");
 
@@ -464,25 +569,122 @@ function processDocument(doc) {
   $("manualFallback").classList.add("hidden");
 }
 
-async function loadTeamData() {
-  const url = $("teamUrl").value.trim();
+async function loadTeamDataFromUrl(url, preferredPlayerName) {
   if (!url) { setMsg($("teamMsg"), "Bitte Link eingeben.", false); return; }
+  $("teamUrl").value = url;
   currentBaseUrl = url;
   setMsg($("teamMsg"), "Lade Daten...", true);
   $("loadTeamBtn").disabled = true;
 
   try {
     const doc = await fetchPage(url);
-    processDocument(doc);
+    processDocument(doc, preferredPlayerName);
   } catch (e) {
-    setMsg($("teamMsg"), "Automatisches Laden fehlgeschlagen. Du kannst den Quelltext unten manuell einfügen.", false);
+    setMsg($("teamMsg"), "Automatisches Laden fehlgeschlagen (" + e.message + "). Du kannst den Quelltext unten manuell einfügen.", false);
     $("manualFallback").classList.remove("hidden");
   } finally {
     $("loadTeamBtn").disabled = false;
   }
 }
 
+function loadTeamData() {
+  return loadTeamDataFromUrl($("teamUrl").value.trim());
+}
+
 $("loadTeamBtn").addEventListener("click", loadTeamData);
+
+// ---------- Favoriten-Spieler ----------
+function getFavPlayers() {
+  try { return JSON.parse(localStorage.getItem("favPlayers") || "[]"); }
+  catch (e) { return []; }
+}
+function setFavPlayers(list) {
+  localStorage.setItem("favPlayers", JSON.stringify(list));
+}
+
+function renderFavPlayers() {
+  const list = $("favPlayersList");
+  const favs = getFavPlayers();
+  list.innerHTML = "";
+  if (!favs.length) {
+    list.classList.add("hidden");
+    return;
+  }
+  list.classList.remove("hidden");
+  favs.forEach((fav, idx) => {
+    const item = document.createElement("div");
+    item.className = "roster-item";
+    item.innerHTML = `
+      <div class="roster-info" style="cursor:pointer;">${fav.label}</div>
+      <div class="roster-actions">
+        <button class="select-fav-btn secondary" style="width:auto; padding:0 10px;">Wählen</button>
+        <button class="remove-btn">✕</button>
+      </div>
+    `;
+    item.querySelector(".select-fav-btn").addEventListener("click", () => selectFavPlayer(fav));
+    item.querySelector(".roster-info").addEventListener("click", () => selectFavPlayer(fav));
+    item.querySelector(".remove-btn").addEventListener("click", () => {
+      const updated = getFavPlayers().filter((_, i) => i !== idx);
+      setFavPlayers(updated);
+      renderFavPlayers();
+    });
+    list.appendChild(item);
+  });
+}
+
+$("addFavPlayerBtn").addEventListener("click", () => {
+  const label = $("favPlayerLabel").value.trim();
+  const url = $("favPlayerUrl").value.trim();
+  if (!label || !url) {
+    setMsg($("favPlayerMsg"), "Bitte Name und Spieler-Link angeben.", false);
+    return;
+  }
+  const favs = getFavPlayers();
+  favs.push({ label, url });
+  setFavPlayers(favs);
+  $("favPlayerLabel").value = "";
+  $("favPlayerUrl").value = "";
+  setMsg($("favPlayerMsg"), `"${label}" als Favorit gespeichert.`, true);
+  renderFavPlayers();
+});
+
+let favPlayerTeams = [];
+let favPlayerActiveLabel = null;
+
+async function selectFavPlayer(fav) {
+  setMsg($("favPlayerMsg"), `Lade Mannschaften von ${fav.label} …`, true);
+  favPlayerActiveLabel = fav.label;
+  try {
+    const doc = await fetchPage(fav.url);
+    const { teams } = extractPlayerBilanz(doc, fav.url);
+    if (!teams.length) {
+      setMsg($("favPlayerMsg"), "Keine Mannschaften in der Bilanz-Tabelle gefunden. Ist der Link eine Spieler-Seite (...L3=Spieler&L3P=...)?", false);
+      return;
+    }
+    favPlayerTeams = teams;
+    const sel = $("favPlayerTeamsSelect");
+    sel.innerHTML = "";
+    teams.forEach((t, idx) => {
+      const opt = document.createElement("option");
+      opt.value = idx;
+      opt.textContent = t.livepz ? `${t.name} (LivePZ ${t.livepz})` : t.name;
+      sel.appendChild(opt);
+    });
+    $("favPlayerTeamsLabel").textContent = `${fav.label} – für welche Mannschaft?`;
+    $("favPlayerTeamsBox").classList.remove("hidden");
+    setMsg($("favPlayerMsg"), `${teams.length} Mannschaft(en) gefunden.`, true);
+    $("favPlayerTeamsBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  } catch (e) {
+    setMsg($("favPlayerMsg"), "Spieler-Seite konnte nicht geladen werden: " + e.message, false);
+  }
+}
+
+$("useFavPlayerTeamBtn").addEventListener("click", () => {
+  const idx = parseInt($("favPlayerTeamsSelect").value, 10);
+  const team = favPlayerTeams[idx];
+  if (!team) return;
+  loadTeamDataFromUrl(team.url, favPlayerActiveLabel);
+});
 
 // Favoriten-Logik
 $("saveFavBtn").addEventListener("click", () => {
@@ -504,6 +706,7 @@ $("clearFavBtn").addEventListener("click", () => {
 
 // Automatisches Laden des Favoriten beim Öffnen der Seite
 window.addEventListener("DOMContentLoaded", () => {
+  renderFavPlayers();
   const savedUrl = localStorage.getItem("favTeamUrl");
   if (savedUrl) {
     $("teamUrl").value = savedUrl;
